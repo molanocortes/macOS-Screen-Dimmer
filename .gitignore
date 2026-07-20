@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output / generated intermediates
+build/
+*.app
+AppIcon.iconset/
+
+# Runtime state
+settings.json
