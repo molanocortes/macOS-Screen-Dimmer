@@ -29,7 +29,8 @@ eclipse, where light is only partly blocked. That is what it does to your screen
 - Goes darker than the hardware minimum by dimming in software, on top of the
   backlight, down to near black.
 - Covers everything: the menu bar, the Dock, and every window, across all displays
-  and Spaces, including full-screen apps.
+  and Spaces, including apps in native full screen (a video in full-screen YouTube
+  keeps dimming).
 - Click-through, so you keep working normally underneath the filter. Clicks and
   keystrokes pass straight through.
 - Precise control with a live percentage, a fine slider, and Off / 25 / 50 / 75 /
@@ -38,8 +39,8 @@ eclipse, where light is only partly blocked. That is what it does to your screen
 - Remembers your last level and window position between launches.
 - Never goes fully black (max is 92%), and the cursor is never dimmed, so you can
   always find your way back.
-- Small and native: one menu-bar and Dock app built on AppKit, with no kernel
-  extensions, no background services, and no telemetry.
+- Small and native: one menu-bar app built on AppKit, with no kernel extensions,
+  no background services, and no telemetry.
 
 ## Install
 
@@ -59,8 +60,9 @@ If you see a "needs PyObjC" alert, install it into any Python 3 and reopen:
 python3 -m pip install pyobjc-framework-Cocoa
 ```
 
-Then launch Penumbra from Launchpad, Spotlight, or the Dock. To start it
-automatically, add it under System Settings > General > Login Items.
+Then launch Penumbra from Launchpad or Spotlight. It lives in the menu bar rather
+than the Dock (see How it works). To start it automatically, add it under
+System Settings > General > Login Items.
 
 ## Usage
 
@@ -68,7 +70,8 @@ Opening the app shows a small control window and a crescent menu-bar icon:
 
 - Slider: drag from Bright to Dark.
 - Presets: Off / 25 / 50 / 75 / Max.
-- Click the menu-bar icon or the Dock icon any time to bring the window back.
+- Click the crescent menu-bar icon any time to bring the window back. Launching
+  the app again does the same thing.
 
 | Key | Action |
 |-----|--------|
@@ -84,13 +87,42 @@ Opening the app shows a small control window and a crescent menu-bar icon:
 
 ## How it works
 
-Penumbra creates one borderless, click-through black window per display, placed
-just below pop-up-menu level so it covers the menu bar, Dock, and all windows while
-its own control panel stays readable on top. Dimming is the opacity of those
-windows, animated with `NSAnimationContext`. Because the filter sits on top of the
-hardware backlight, it can push the perceived brightness far below the backlight's
-own minimum. Settings live in a small JSON file at
-`~/Library/Application Support/Penumbra/settings.json`.
+Penumbra creates one borderless, click-through black window per display, at
+`NSScreenSaverWindowLevel`, so it covers the menu bar, the Dock, and every window.
+Dimming is the opacity of those windows, animated with `NSAnimationContext`.
+Because the filter sits on top of the hardware backlight, it can push the
+perceived brightness far below the backlight's own minimum. Settings live in a
+small JSON file at `~/Library/Application Support/Penumbra/settings.json`.
+
+Covering an app that is in native full screen takes two separate things, and the
+window level is only one of them. A full-screen app gets its own Space, and
+whether an overlay may join that Space is decided by the collection behaviour
+(`canJoinAllSpaces` + `fullScreenAuxiliary`) together with the process's
+activation policy. A regular Dock app is not allowed to float over another app's
+full-screen Space at any window level, so Penumbra runs as an accessory
+(menu-bar-only) app: that is the reason it has no persistent Dock icon. The
+privilege is fixed when a window is created, so the policy is set before any
+window is built. Because macOS can also demote a window while Spaces change,
+level and collection behaviour are re-applied on every Space change.
+
+### Limits
+
+An overlay cannot cover everything, and this one does not pretend to:
+
+- Apps that take the display with `CGDisplayCapture` or true exclusive full screen
+  (some games) draw above any window.
+- The screensaver and the login window are off limits to all apps, by design,
+  since macOS 10.13.
+- At screen-saver level the filter also dims the volume and brightness HUD and
+  notification banners. For a whole-screen dimmer that is arguably right, but it
+  is worth knowing.
+- DRM video (Netflix, Apple TV+) blocks screen *capture*, not covering, so it
+  still dims normally.
+
+If you need something that survives even the cases above, the other technique is
+the f.lux one: adjust the display gamma tables
+(`CGSetDisplayTransferByFormula`) instead of covering pixels. That reaches
+everything an overlay cannot, at the cost of touching the whole display pipeline.
 
 ## Building and customizing
 

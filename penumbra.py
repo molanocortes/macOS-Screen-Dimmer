@@ -3,13 +3,33 @@
 Penumbra: a software brightness filter for macOS.
 
 Lays a click-through black overlay above the menu bar, dock and every window on
-every display, so you can dim the screen far below the hardware minimum. It runs
-as a regular Dock app with a native vibrancy control window; the menu-bar icon
-is a secondary control.
+every display, so you can dim the screen far below the hardware minimum, and it
+keeps dimming when a video goes native fullscreen. It runs menu-bar-only (see the
+activation-policy note below) with a native vibrancy control window; the menu-bar
+icon opens that window.
 
 Key implementation note: the control window MUST be a plain titled NSWindow
-placed *above* the dark overlay (window level 102). A utility NSPanel silently
-fails to order in for this kind of app; do not switch back to one.
+placed *above* the dark overlay. A utility NSPanel silently fails to order in
+for this kind of app; do not switch back to one.
+
+Second key note: showing the shade over an app in *native fullscreen* (a video
+in YouTube fullscreen) needs two independent things, and a window level alone
+buys neither:
+  1. Space membership - the collection behaviour must let the window join the
+     fullscreen Space (canJoinAllSpaces + fullScreenAuxiliary, plus
+     canJoinAllApplications on macOS 13+).
+  2. z-order inside that Space - the level must beat the fullscreen window,
+     hence NSScreenSaverWindowLevel (1000) rather than the old 100.
+macOS can also demote a window while Spaces switch, so both are re-asserted on
+every Space change (see _reassert_overlays).
+
+Gate 1 is the one that bit us, and the deciding factor is the ACTIVATION POLICY,
+not the level. Measured on macOS 15.7: a Regular (Dock) app never reaches another
+app's fullscreen Space, at any level, with any collection behaviour; an Accessory
+app reaches it at every level. The privilege is fixed when the window is created,
+so the policy must be set BEFORE the overlays are built (a Regular-born window
+stays excluded even after the process transforms). Hence the app is menu-bar-only:
+it still bounces in the Dock while Python starts up, then drops the icon.
 
 Talks to AppKit through PyObjC at runtime, so it needs no compiler.
 """
@@ -19,11 +39,12 @@ import os
 
 import objc
 
+import AppKit
 from AppKit import (
     NSApplication, NSApp, NSObject, NSWindow, NSColor, NSScreen, NSView,
     NSStatusBar, NSSlider, NSSegmentedControl, NSTextField, NSFont, NSImage,
     NSVisualEffectView, NSMenu, NSMenuItem, NSAnimationContext, NSEvent,
-    NSApplicationActivationPolicyRegular,
+    NSApplicationActivationPolicyAccessory,
     NSVisualEffectMaterialPopover, NSVisualEffectBlendingModeBehindWindow,
     NSVisualEffectStateActive,
     NSWindowStyleMaskBorderless, NSWindowStyleMaskTitled,
@@ -38,6 +59,9 @@ from AppKit import (
     NSSegmentSwitchTrackingSelectOne, NSFontWeightSemibold, NSFontWeightMedium,
     NSEventMaskKeyDown, NSEventModifierFlagCommand, NSEventModifierFlagControl,
     NSEventModifierFlagOption, NSApplicationDidChangeScreenParametersNotification,
+    NSScreenSaverWindowLevel, NSWorkspace,
+    NSWorkspaceActiveSpaceDidChangeNotification,
+    NSWorkspaceDidActivateApplicationNotification,
 )
 from Foundation import (
     NSNotificationCenter, NSDistributedNotificationCenter, NSAttributedString,
@@ -45,8 +69,31 @@ from Foundation import (
 from PyObjCTools import AppHelper
 
 MAX_ALPHA = 0.92                 # 100% on the slider -> never fully black
-OVERLAY_LEVEL = 100              # just below pop-up menus; covers menu bar + dock
+# Screen-saver level (1000): the only level that also covers another app's
+# native-fullscreen window. Anything in the 100s loses to fullscreen video.
+OVERLAY_LEVEL = int(NSScreenSaverWindowLevel)
+MENU_LEVEL = 100                 # temporary drop so our own menus stay readable
 PANEL_LEVEL = OVERLAY_LEVEL + 2  # control window sits above the overlay
+
+# macOS 13+: "for floating windows and system overlays". Absent on older
+# systems, where the mask below still works, just without this bit.
+_CAN_JOIN_ALL_APPLICATIONS = getattr(
+    AppKit, "NSWindowCollectionBehaviorCanJoinAllApplications", 0)
+
+# Gate 1: Space membership. Never add fullScreenNone or moveToActiveSpace here,
+# they cancel the effect.
+OVERLAY_BEHAVIOR = (
+    NSWindowCollectionBehaviorCanJoinAllSpaces
+    | NSWindowCollectionBehaviorStationary
+    | NSWindowCollectionBehaviorFullScreenAuxiliary
+    | NSWindowCollectionBehaviorIgnoresCycle
+    | _CAN_JOIN_ALL_APPLICATIONS)
+
+# The control window follows the shade into fullscreen Spaces, so the slider is
+# reachable without leaving the video.
+PANEL_BEHAVIOR = (
+    NSWindowCollectionBehaviorCanJoinAllSpaces
+    | NSWindowCollectionBehaviorFullScreenAuxiliary)
 ACTIVATE_NOTE = "com.molanocortes.penumbra.activate"
 APP_NAME = "Penumbra"
 VERSION = "1.0"
@@ -94,21 +141,35 @@ def label(text, frame, *, size=12, weight=None, align=None, color=None):
     return f
 
 
+def screen_key(screen):
+    """CGDirectDisplayID, so overlays survive hotplug and resolution changes."""
+    try:
+        n = screen.deviceDescription().objectForKey_("NSScreenNumber")
+        if n is not None:
+            return int(n)
+    except Exception:
+        pass
+    return None
+
+
+def configure_overlay(w, level=OVERLAY_LEVEL):
+    """Re-assertable window traits. setLevel_ takes an int, never a float."""
+    w.setLevel_(int(level))
+    w.setCollectionBehavior_(OVERLAY_BEHAVIOR)
+    w.setIgnoresMouseEvents_(True)          # clicks pass straight through
+    w.setCanHide_(False)                    # survives Cmd-H
+    w.setHidesOnDeactivate_(False)          # survives losing focus
+
+
 def make_overlay(screen):
-    frame = screen.frame()
+    frame = screen.frame()                  # frame(), never visibleFrame()
     w = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
         frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False)
     w.setOpaque_(False)
     w.setBackgroundColor_(NSColor.blackColor())
     w.setAlphaValue_(0.0)
     w.setHasShadow_(False)
-    w.setIgnoresMouseEvents_(True)          # clicks pass straight through
-    w.setLevel_(OVERLAY_LEVEL)
-    w.setCollectionBehavior_(
-        NSWindowCollectionBehaviorCanJoinAllSpaces
-        | NSWindowCollectionBehaviorStationary
-        | NSWindowCollectionBehaviorFullScreenAuxiliary
-        | NSWindowCollectionBehaviorIgnoresCycle)
+    configure_overlay(w)                    # so the menu bar / notch stay covered
     w.setReleasedWhenClosed_(False)
     w.setFrame_display_(frame, True)
     return w
@@ -119,14 +180,18 @@ class DimmerDelegate(NSObject):
     # ---- lifecycle ---------------------------------------------------------
 
     def applicationDidFinishLaunching_(self, note):
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        # Menu-bar-only, and set FIRST: every window built below inherits its
+        # fullscreen-Space privilege from the policy in force at creation time.
+        # Regular here = the shade silently vanishes over fullscreen video.
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         icon = self._app_icon()
         if icon is not None:
             NSApp.setApplicationIconImage_(icon)
 
         self.settings = load_settings()
         self.dim = min(max(float(self.settings.get("dimLevel", 0.0)), 0.0), 1.0)
-        self.overlays = []
+        self.overlays = {}              # CGDirectDisplayID -> NSWindow
+        self.level = OVERLAY_LEVEL
 
         self._build_main_menu()
         self._build_status_item()
@@ -136,6 +201,12 @@ class DimmerDelegate(NSObject):
         NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
             self, "screensChanged:",
             NSApplicationDidChangeScreenParametersNotification, None)
+        # Fullscreen enter/exit creates a Space *after* the overlay was ordered
+        # in, and macOS can demote windows across the transition. Re-assert.
+        wsc = NSWorkspace.sharedWorkspace().notificationCenter()
+        for name in (NSWorkspaceActiveSpaceDidChangeNotification,
+                     NSWorkspaceDidActivateApplicationNotification):
+            wsc.addObserver_selector_name_object_(self, "spaceChanged:", name, None)
         NSDistributedNotificationCenter.defaultCenter().addObserver_selector_name_object_(
             self, "reactivate:", ACTIVATE_NOTE, None)
         self._install_key_monitor()
@@ -157,14 +228,48 @@ class DimmerDelegate(NSObject):
 
     # ---- overlays ----------------------------------------------------------
 
+    @objc.python_method
+    def _windows(self):
+        return list(self.overlays.values())
+
     def _rebuild_overlays(self):
-        for w in self.overlays:
+        """Keyed by display ID: keep the window a display already has, close the
+        rest. Ordering out without closing leaked one window per display change."""
+        stale = dict(self.overlays)
+        fresh = {}
+        for i, s in enumerate(NSScreen.screens()):
+            key = screen_key(s)
+            if key is None:
+                key = "idx%d" % i            # nameless display: fall back to order
+            w = stale.pop(key, None)
+            if w is None:
+                w = make_overlay(s)
+            else:
+                configure_overlay(w, self.level)
+                w.setFrame_display_(s.frame(), True)
+            fresh[key] = w
+        for w in stale.values():
             w.orderOut_(None)
-        self.overlays = [make_overlay(s) for s in NSScreen.screens()]
+            w.close()
+        self.overlays = fresh
         self._apply(animated=False)
 
     def screensChanged_(self, note):
         self._rebuild_overlays()
+
+    def spaceChanged_(self, note):
+        self._reassert_overlays()
+        # The Space transition finishes after the notification; do it again once
+        # the new Space actually exists.
+        AppHelper.callLater(0.35, self._reassert_overlays)
+
+    def _reassert_overlays(self):
+        """Idempotent: re-apply level + collection behaviour and re-order in."""
+        visible = self.dim * MAX_ALPHA > 0.001
+        for w in self._windows():
+            configure_overlay(w, self.level)
+            if visible:
+                w.orderFrontRegardless()
 
     @objc.python_method
     def _apply(self, animated=False):
@@ -172,7 +277,7 @@ class DimmerDelegate(NSObject):
         if animated:
             NSAnimationContext.beginGrouping()
             NSAnimationContext.currentContext().setDuration_(0.18)
-            for w in self.overlays:
+            for w in self._windows():
                 if a > 0.001:
                     w.orderFrontRegardless()
                 w.animator().setAlphaValue_(a)
@@ -180,7 +285,7 @@ class DimmerDelegate(NSObject):
             if a <= 0.001:
                 AppHelper.callLater(0.22, self._hide_zero_overlays)
         else:
-            for w in self.overlays:
+            for w in self._windows():
                 if a <= 0.001:
                     w.orderOut_(None)
                 else:
@@ -191,7 +296,7 @@ class DimmerDelegate(NSObject):
 
     def _hide_zero_overlays(self):
         if self.dim * MAX_ALPHA <= 0.001:
-            for w in self.overlays:
+            for w in self._windows():
                 w.orderOut_(None)
 
     # ---- control window ----------------------------------------------------
@@ -207,7 +312,8 @@ class DimmerDelegate(NSObject):
         self.panel.setTitleVisibility_(NSWindowTitleHidden)
         self.panel.setTitlebarAppearsTransparent_(True)
         self.panel.setMovableByWindowBackground_(True)
-        self.panel.setLevel_(PANEL_LEVEL)
+        self.panel.setLevel_(int(PANEL_LEVEL))
+        self.panel.setCollectionBehavior_(PANEL_BEHAVIOR)   # reachable inside fullscreen
         self.panel.setReleasedWhenClosed_(False)
         self.panel.setHidesOnDeactivate_(False)
         self.panel.setOpaque_(False)
@@ -301,8 +407,19 @@ class DimmerDelegate(NSObject):
         m.addItemWithTitle_action_keyEquivalent_("Hide " + APP_NAME, "hide:", "h")
         m.addItem_(NSMenuItem.separatorItem())
         m.addItemWithTitle_action_keyEquivalent_("Quit " + APP_NAME, "terminate:", "q")
+        m.setDelegate_(self)            # drop the shade while this menu is open
         app_item.setSubmenu_(m)
         NSApp.setMainMenu_(main)
+
+    # Menus draw at level 101, below the shade at 1000, so our own app menu
+    # would be dimmed into unreadability. Duck under it while it is tracking.
+    def menuWillOpen_(self, menu):
+        self.level = MENU_LEVEL
+        self._reassert_overlays()
+
+    def menuDidClose_(self, menu):
+        self.level = OVERLAY_LEVEL
+        self._reassert_overlays()
 
     def showPanel_(self, sender):
         self.show_panel()
@@ -353,9 +470,17 @@ class DimmerDelegate(NSObject):
         def handler(event):
             if not self.panel.isKeyWindow():
                 return event
-            if event.modifierFlags() & (NSEventModifierFlagCommand
-                                        | NSEventModifierFlagControl
-                                        | NSEventModifierFlagOption):
+            mods = event.modifierFlags()
+            if mods & NSEventModifierFlagCommand:
+                # A menu-bar-only app has no menu bar, so the main menu's key
+                # equivalents never fire. Honour the two the panel advertises.
+                ch = (event.charactersIgnoringModifiers() or "").lower()
+                if ch == "q":
+                    NSApp.terminate_(None); return None
+                if ch == "w":
+                    self.panel.orderOut_(None); return None
+                return event
+            if mods & (NSEventModifierFlagControl | NSEventModifierFlagOption):
                 return event
             code = event.keyCode()
             if code == 53:                          # esc -> hide

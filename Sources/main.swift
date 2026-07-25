@@ -10,16 +10,38 @@ private let kMaxAlpha: CGFloat = 0.92
 private let kDefaultsKey = "dimLevel"
 private let kBundleID = "com.molanocortes.penumbra"
 
+/// Screen-saver level: the only level that also covers another app's native
+/// fullscreen window (YouTube fullscreen). The old value, one below pop-up-menu
+/// level, lost to fullscreen video and to Control Center at 101.
+private let kOverlayLevel = NSWindow.Level.screenSaver
+/// Dropped to this only while our own status-item menu is tracking, since menus
+/// draw at pop-up level and would otherwise sit under the shade.
+private let kMenuLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.popUpMenuWindow)) - 1)
+
+/// Gate 1, Space membership. `canJoinAllApplications` is macOS 13+, so it is
+/// added by raw value guarded on availability. Never add `.fullScreenNone` or
+/// `.moveToActiveSpace`: they cancel the effect.
+private var kOverlayBehavior: NSWindow.CollectionBehavior {
+    var b: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary,
+                                          .fullScreenAuxiliary, .ignoresCycle]
+    if #available(macOS 13.0, *) {
+        b.insert(NSWindow.CollectionBehavior(rawValue: 1 << 18))  // canJoinAllApplications
+    }
+    return b
+}
+
 // MARK: - Overlay window (the click-through dark filter)
 
 /// A borderless, transparent, click-through black window that sits above the
-/// menu bar, dock and all app windows but *below* pop-up menus, so this app's
-/// own control menu stays readable at any dim level.
+/// menu bar, dock and all app windows, including another app's native-fullscreen
+/// window. The app runs as `.accessory`, which is what actually admits this
+/// window to other apps' fullscreen Spaces; a Regular (Dock) app is barred from
+/// them at any level. The level only decides z-order once it is in the Space.
 final class OverlayWindow: NSWindow {
 
     init(screen: NSScreen) {
-        super.init(contentRect: screen.frame,
-                   styleMask: .borderless,
+        super.init(contentRect: screen.frame,   // frame, not visibleFrame:
+                   styleMask: .borderless,      // menu bar and notch stay covered
                    backing: .buffered,
                    defer: false)
 
@@ -28,11 +50,9 @@ final class OverlayWindow: NSWindow {
         hasShadow = false
         ignoresMouseEvents = true          // clicks pass straight through
         isReleasedWhenClosed = false
-        // One below pop-up-menu level: covers menu bar + dock + every window,
-        // but our NSMenu (drawn at pop-up level) still renders on top of it.
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.popUpMenuWindow)) - 1)
-        collectionBehavior = [.canJoinAllSpaces, .stationary,
-                              .fullScreenAuxiliary, .ignoresCycle]
+        canHide = false                    // survives Cmd-H
+        hidesOnDeactivate = false          // survives losing focus
+        applyOverlayTraits()
 
         let v = NSView(frame: screen.frame)
         v.wantsLayer = true
@@ -40,6 +60,13 @@ final class OverlayWindow: NSWindow {
         contentView = v
 
         setFrame(screen.frame, display: true)
+    }
+
+    /// Idempotent, and re-applied on every Space change: macOS can demote a
+    /// window across a fullscreen transition, so re-setting the level matters.
+    func applyOverlayTraits(level newLevel: NSWindow.Level = kOverlayLevel) {
+        level = newLevel
+        collectionBehavior = kOverlayBehavior
     }
 
     // Never steal focus.
@@ -97,7 +124,10 @@ final class ControlView: NSView {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
-    private var overlays: [OverlayWindow] = []
+    /// Keyed by CGDirectDisplayID so hotplug and resolution changes reuse the
+    /// window a display already has instead of stacking up new ones.
+    private var overlays: [CGDirectDisplayID: OverlayWindow] = [:]
+    private var overlayLevel: NSWindow.Level = kOverlayLevel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let control = ControlView()
     private var loginItem: NSMenuItem?
@@ -122,6 +152,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
+        // Entering/leaving fullscreen creates a Space after the overlay was
+        // ordered in, and does NOT fire didChangeScreenParameters. Re-assert.
+        for name: NSNotification.Name in [NSWorkspace.activeSpaceDidChangeNotification,
+                                          NSWorkspace.didActivateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                self, selector: #selector(spaceChanged), name: name, object: nil)
+        }
+
         // Restore last level (clamped).
         let saved = UserDefaults.standard.double(forKey: kDefaultsKey)
         dim = min(max(CGFloat(saved), 0), 1)
@@ -129,17 +167,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: overlays
 
+    private static func displayID(_ screen: NSScreen, index: Int) -> CGDirectDisplayID {
+        let n = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        let id = n?.uint32Value ?? 0
+        return id != 0 ? id : CGDirectDisplayID(1_000_000 + index)   // nameless display
+    }
+
     private func rebuildOverlays() {
-        overlays.forEach { $0.orderOut(nil) }
-        overlays = NSScreen.screens.map { OverlayWindow(screen: $0) }
+        var stale = overlays
+        var fresh: [CGDirectDisplayID: OverlayWindow] = [:]
+        for (i, screen) in NSScreen.screens.enumerated() {
+            let id = Self.displayID(screen, index: i)
+            if let w = stale.removeValue(forKey: id) {
+                w.applyOverlayTraits(level: overlayLevel)
+                w.setFrame(screen.frame, display: true)
+                fresh[id] = w
+            } else {
+                fresh[id] = OverlayWindow(screen: screen)
+            }
+        }
+        for (_, w) in stale {          // orderOut alone leaked one window per change
+            w.orderOut(nil)
+            w.close()
+        }
+        overlays = fresh
         applyDim()
     }
 
     @objc private func screensChanged() { rebuildOverlays() }
 
+    @objc private func spaceChanged() {
+        reassertOverlays()
+        // The Space transition completes after the notification fires.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.reassertOverlays()
+        }
+    }
+
+    /// Idempotent: re-apply level + collection behaviour, then re-order in.
+    private func reassertOverlays() {
+        let visible = dim * kMaxAlpha > 0.001
+        for w in overlays.values {
+            w.applyOverlayTraits(level: overlayLevel)
+            if visible { w.orderFrontRegardless() }
+        }
+    }
+
     private func applyDim() {
         let a = dim * kMaxAlpha
-        for w in overlays {
+        for w in overlays.values {
             if a <= 0.001 {
                 w.orderOut(nil)
             } else {
@@ -200,14 +276,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    /// Keep the slider and login checkmark in sync when the menu opens.
+    /// Keep the slider and login checkmark in sync when the menu opens, and duck
+    /// the shade under the menu: this status item DOES have an NSMenu, and menus
+    /// draw at pop-up level, i.e. far below the shade's screen-saver level.
     func menuWillOpen(_ menu: NSMenu) {
         control.set(dim)
+        overlayLevel = kMenuLevel
+        reassertOverlays()
         if #available(macOS 13.0, *) {
             loginItem?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         } else {
             loginItem?.isHidden = true
         }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        overlayLevel = kOverlayLevel
+        reassertOverlays()
     }
 
     @objc private func preset(_ sender: NSMenuItem) {
