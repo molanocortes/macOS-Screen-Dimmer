@@ -1,12 +1,13 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/header-dark.svg">
+  <img alt="penumbra-screen-dimmer: darker than the hardware minimum. Python, PyObjC and AppKit, MIT. A brightness ramp showing the range below the backlight's hardware minimum that Penumbra reaches in software." src="docs/header-light.svg" width="100%">
+</picture>
+
 # Penumbra
 
 A macOS screen dimmer that takes your display darker than the hardware minimum.
 
 ![Penumbra dimming a Mac screen](docs/screenshot.png)
-
-![platform](https://img.shields.io/badge/platform-macOS%2013%2B-1b1f2a)
-![license](https://img.shields.io/badge/license-MIT-3a7afe)
-![built with](https://img.shields.io/badge/built%20with-PyObjC%20%2F%20AppKit-5a6b8c)
 
 ## The problem
 
