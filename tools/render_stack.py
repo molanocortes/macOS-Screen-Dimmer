@@ -12,7 +12,7 @@ Usage: python3 tools/render_stack.py      (writes docs/stack-{light,dark}.svg)
 
 from pathlib import Path
 
-W, H = 1000, 380
+W, H = 860, 380
 MONO = ('font-family="ui-monospace,SFMono-Regular,SF Mono,Menlo,'
         'Consolas,monospace"')
 
