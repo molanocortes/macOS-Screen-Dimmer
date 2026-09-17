@@ -1,13 +1,34 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/header-dark.svg">
-  <img alt="penumbra-screen-dimmer: darker than the hardware minimum. Python, PyObjC and AppKit, MIT. A brightness ramp showing the range below the backlight's hardware minimum that Penumbra reaches in software." src="docs/header-light.svg" width="100%">
+  <img alt="MacOS-Screen-Dimmer: darker than the hardware minimum. Python, PyObjC and AppKit, MIT. A brightness ramp showing the range below the backlight's hardware minimum that Penumbra reaches in software." src="docs/header-light.svg" width="100%">
 </picture>
 
-# Penumbra
+<h1 align="center">
+  <img src="docs/icon.png" width="112" alt="Penumbra app icon: a sphere half covered by a soft shadow"><br>
+  Penumbra
+</h1>
 
-A macOS screen dimmer that takes your display darker than the hardware minimum.
+<p align="center">
+  <b>A macOS screen dimmer that takes your display darker than the hardware minimum.</b><br>
+  Click-through, on every display and Space, over full-screen apps too.
+</p>
 
-![Penumbra dimming a Mac screen](docs/screenshot.png)
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#limits">Limits</a>
+</p>
+
+<p align="center">
+  <img src="docs/demo.gif" width="100%" alt="A Mac desktop at 23:48 with a bright white document open. Penumbra's control window steps through Off, 25, 50, 75 and Max, and the whole screen, menu bar and Dock included, fades toward near black while the control window and the cursor stay at full brightness.">
+</p>
+
+<p align="center"><sub>
+  The desktop is an illustration. The control window is rendered from the app's own AppKit views, and
+  the shade is drawn at exactly the opacity the app applies.
+  <a href="tools/render_demo.py">See how the picture is made.</a>
+</sub></p>
 
 ## The problem
 
@@ -24,6 +45,16 @@ click-through, so it changes only what you see, never what you can do.
 
 The name is the astronomy term for the soft partial shadow at the edge of an
 eclipse, where light is only partly blocked. That is what it does to your screen.
+
+## Every preset, same frame
+
+<p align="center">
+  <img src="docs/levels.png" width="100%" alt="The same corner of the desktop at each preset: Off, 25, 50, 75 and Max, with the shade opacity going from 0.00 to 0.85.">
+</p>
+
+The backlight stays where you left it. Penumbra adds a black layer on top and
+controls its opacity, so the steps continue smoothly past the point where the
+brightness keys stop doing anything.
 
 ## Features
 
@@ -49,8 +80,8 @@ Penumbra runs on Python and [PyObjC](https://pyobjc.readthedocs.io) (the AppKit
 bridge), so there is nothing to compile.
 
 ```bash
-git clone https://github.com/molanocortes/penumbra-screen-dimmer.git
-cd penumbra-screen-dimmer
+git clone https://github.com/molanocortes/MacOS-Screen-Dimmer.git
+cd MacOS-Screen-Dimmer
 ./build_app.sh                 # builds and installs Penumbra.app to /Applications
 open /Applications/Penumbra.app
 ```
@@ -66,6 +97,8 @@ than the Dock (see How it works). To start it automatically, add it under
 System Settings > General > Login Items.
 
 ## Usage
+
+<img src="docs/panel.png" width="300" align="right" alt="Penumbra's control window at 50 percent: a large percentage readout, a slider from Bright to Dark, and Off, 25, 50, 75 and Max presets.">
 
 Opening the app shows a small control window and a crescent menu-bar icon:
 
@@ -87,6 +120,11 @@ Opening the app shows a small control window and a crescent menu-bar icon:
 - A Python 3 with PyObjC (`pip install pyobjc-framework-Cocoa` if needed)
 
 ## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/stack-dark.svg">
+  <img alt="The macOS window stack, low to high: app windows at level 0, the Dock at 20, the menu bar at 24, open menus at 101, Penumbra's shade at 1000, its control window at 1002, and the cursor above everything. A click falls through the shade and lands on the app below." src="docs/stack-light.svg" width="100%">
+</picture>
 
 Penumbra creates one borderless, click-through black window per display, at
 `NSScreenSaverWindowLevel`, so it covers the menu bar, the Dock, and every window.
@@ -134,6 +172,14 @@ Regenerate the app icon and the menu-bar glyph with:
 
 ```bash
 python3 make_icon.py && iconutil -c icns AppIcon.iconset -o AppIcon.icns
+```
+
+The README pictures are generated too, so they stay true to the app. After a UI
+change, rebuild them (needs Pillow as well as PyObjC):
+
+```bash
+python3 tools/render_demo.py     # demo.gif, levels.png, panel.png, screenshot.png
+python3 tools/render_stack.py    # docs/stack-light.svg, docs/stack-dark.svg
 ```
 
 `Sources/main.swift` is an optional, dependency-free AppKit port; build it with
