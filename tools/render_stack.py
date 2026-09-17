@@ -4,8 +4,9 @@ render_stack.py - the window-level diagram in the README's "How it works".
 
 Draws the macOS window stack as stacked planes, with the levels as AppKit and
 CoreGraphics define them, and shows where Penumbra's two windows sit in it. One
-light and one dark SVG, chosen by prefers-color-scheme through <picture>. Same
-palette and type as the header band. No script, no web fonts, no external refs.
+light and one dark SVG, chosen by prefers-color-scheme through <picture>, in the
+app's own colours: neutral greys and the system blue of the control window. No
+script, no web fonts, no external refs.
 
 Usage: python3 tools/render_stack.py      (writes docs/stack-{light,dark}.svg)
 """
@@ -13,14 +14,14 @@ Usage: python3 tools/render_stack.py      (writes docs/stack-{light,dark}.svg)
 from pathlib import Path
 
 W, H = 860, 380
-MONO = ('font-family="ui-monospace,SFMono-Regular,SF Mono,Menlo,'
-        'Consolas,monospace"')
+SANS = ('font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,'
+        'Arial,sans-serif"')
 
 THEMES = {
-    "light": dict(ink="#191713", muted="#6e6b62", line="#c6c1b2",
-                  faint="#dcd6c8", accent="#d94e12", fill="#f1efe9"),
-    "dark":  dict(ink="#f0ede6", muted="#8f887c", line="#4a443b",
-                  faint="#3d3831", accent="#ff7a3d", fill="#1b1815"),
+    "light": dict(ink="#1d1d1f", muted="#6e6e73", line="#c7c7cc",
+                  accent="#0a6cff", fill="#f5f5f7"),
+    "dark":  dict(ink="#f5f5f7", muted="#98989d", line="#48484a",
+                  accent="#4c9dff", fill="#1c1c1e"),
 }
 
 # bottom to top: (name, level, note, kind)
@@ -37,9 +38,9 @@ LAYERS = [
 X0, PW, SKEW, PH, STEP, BASE = 40, 250, 78, 30, 42, 330
 
 
-def txt(x, y, s, fill, size=10, anchor="start", ls=0.8, weight=None):
+def txt(x, y, s, fill, size=10, anchor="start", ls=0, weight=None):
     w = f' font-weight="{weight}"' if weight else ""
-    return (f'<text x="{x}" y="{y}" {MONO} font-size="{size}" letter-spacing="{ls}" '
+    return (f'<text x="{x}" y="{y}" {SANS} font-size="{size}" letter-spacing="{ls}" '
             f'text-anchor="{anchor}" fill="{fill}"{w}>{s}</text>')
 
 
@@ -59,15 +60,14 @@ def build(theme):
          f'<defs><marker id="c{theme}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" '
          f'markerHeight="7" orient="auto"><path d="M0 1L7 4L0 7z" '
          f'fill="{c["accent"]}"/></marker></defs>']
-    o.append(txt(0, 14, "WINDOW LEVEL, LOW TO HIGH", c["muted"], 9, ls=1.6))
+    o.append(txt(0, 14, "Window level, low to high", c["muted"], 11))
 
     lx = X0 + PW + SKEW + 34                 # label column
     for i, (name, level, note, kind) in enumerate(LAYERS):
         y = BASE - i * STEP
         hot = kind != "sys"
         if kind == "shade":
-            o.append(plane(y, c["accent"], c["ink"] if theme == "light" else "#000000",
-                           0.62, 1.6))
+            o.append(plane(y, c["accent"], "#000000", 0.78, 1.6))
         elif kind == "own":
             o.append(plane(y, c["accent"], c["fill"], 1, 1.4))
         else:
@@ -75,11 +75,11 @@ def build(theme):
         my = y - PH / 2
         o.append(f'<path d="M{X0 + PW + SKEW / 2 + 6} {my}H{lx - 8}" stroke="'
                  f'{c["accent"] if hot else c["line"]}" stroke-width="1"/>')
-        o.append(txt(lx + 86, my - 1, level, c["accent"] if hot else c["ink"], 11,
-                     "end", 0.4, 600))
-        o.append(txt(lx + 100, my - 1, name.upper(), c["accent"] if hot else c["ink"], 10.5,
-                     ls=1.3, weight=600))
-        o.append(txt(lx + 100, my + 13, note, c["muted"], 9.5, ls=0.3))
+        o.append(txt(lx + 86, my - 1, level, c["accent"] if hot else c["ink"], 12,
+                     "end", 0, 600))
+        o.append(txt(lx + 100, my - 1, name[0].upper() + name[1:], c["accent"] if hot else c["ink"],
+                     12, weight=600))
+        o.append(txt(lx + 100, my + 14, note, c["muted"], 10.5))
 
     # a click, falling straight through the shade to the app underneath
     cx = X0 + SKEW / 2 + 84
@@ -88,8 +88,8 @@ def build(theme):
              f'stroke-dasharray="4 3" marker-end="url(#c{theme})"/>')
     o.append(f'<circle cx="{cx}" cy="{shade_y - PH / 2}" r="4.5" fill="{c["fill"]}" '
              f'stroke="{c["accent"]}" stroke-width="1.4"/>')
-    o.append(txt(X0, BASE + 28, "A CLICK FALLS THROUGH THE SHADE (ignoresMouseEvents) "
-                 "AND LANDS ON THE APP BELOW", c["muted"], 9, ls=1.2))
+    o.append(txt(X0, BASE + 28, "A click falls through the shade (ignoresMouseEvents) "
+                 "and lands on the app below.", c["muted"], 11))
     o.append("</svg>")
     return "".join(o)
 

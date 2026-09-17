@@ -6,6 +6,7 @@ render_demo.py - the README's product pictures.
   docs/levels.png   the same frame at each preset, side by side
   docs/panel.png    the control window on its own
   docs/screenshot.png  a still of the demo at 75 %
+  docs/social-preview.png  the same still on a 1280x640 card for GitHub
 
 The desktop is an illustration (no real apps, no real wallpaper), but everything
 Penumbra contributes is the real thing: the control window is rendered from the
@@ -236,6 +237,12 @@ def main():
     still = frame(base, panels, 75, 0.75 * MAX_ALPHA).convert("RGB")
     still.resize((1600, 1600 * H // W), Image.LANCZOS).save(DOCS / "screenshot.png", optimize=True)
 
+    card = Image.new("RGB", (1280, 640), (12, 16, 30))       # 1280x640 for GitHub
+    shot = still.resize((960, 960 * H // W), Image.LANCZOS)
+    m = Image.new("L", shot.size, 0)
+    ImageDraw.Draw(m).rounded_rectangle([0, 0, shot.width - 1, shot.height - 1], radius=14, fill=255)
+    card.paste(shot, ((1280 - shot.width) // 2, (640 - shot.height) // 2), m)
+    card.save(DOCS / "social-preview.png", optimize=True)
     panels[50].save(DOCS / "panel.png", optimize=True)     # the control window on its own
 
     # ---- levels.png --------------------------------------------------------
@@ -252,11 +259,11 @@ def main():
         ImageDraw.Draw(m).rounded_rectangle([0, 0, t.width - 1, t.height - 1], radius=8 * SS, fill=255)
         x = i * (tw + gap)
         out.paste(t, tuple(p(x, 0)), m)
-        d.rounded_rectangle(p(x, 0, x + tw, th), radius=8 * SS, outline=(128, 124, 116, 110), width=SS)
-        d.text(p(x + 2, th + 12), name.upper() if not name.isdigit() else name + " %",
-               font=font(11, "Semibold", MONO), fill=(217, 94, 36))
-        d.text(p(x + tw - 2, th + 12), "shade %.2f" % a, font=font(10.5, "Regular", MONO),
-               fill=(136, 131, 122), anchor="ra")
+        d.rounded_rectangle(p(x, 0, x + tw, th), radius=8 * SS, outline=(128, 128, 134, 110), width=SS)
+        d.text(p(x + 2, th + 11), name if not name.isdigit() else name + "%",
+               font=font(13, "Semibold"), fill=(64, 140, 255))
+        d.text(p(x + tw - 2, th + 12), "shade opacity %.2f" % a, font=font(11.5, "Regular"),
+               fill=(134, 134, 140), anchor="ra")
     out.save(DOCS / "levels.png", optimize=True)
 
     for f in ("demo.gif", "screenshot.png", "panel.png", "levels.png"):

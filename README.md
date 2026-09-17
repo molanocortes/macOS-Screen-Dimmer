@@ -1,8 +1,3 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/header-dark.svg">
-  <img alt="MacOS-Screen-Dimmer: darker than the hardware minimum. Python, PyObjC and AppKit, MIT. A brightness ramp showing the range below the backlight's hardware minimum that Penumbra reaches in software." src="docs/header-light.svg" width="100%">
-</picture>
-
 <h1 align="center">
   <img src="docs/icon.png" width="112" alt="Penumbra app icon: a sphere half covered by a soft shadow"><br>
   Penumbra
